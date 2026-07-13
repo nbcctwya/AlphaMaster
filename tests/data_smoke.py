@@ -9,7 +9,7 @@ import yaml
 from qlib.utils import init_instance_by_config
 from qlib.backtest import backtest
 
-from alphamaster.model import MASTERTrainer
+from alphamaster.model import DailyBatchSamplerRandom, MASTERTrainer
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +55,14 @@ def main():
     print(f"index_names={sample.get_index().names}")
     if first.shape[-1] != 222:
         raise AssertionError(f"expected 221 features + label, got {first.shape[-1]}")
+    sampler = DailyBatchSamplerRandom(sample, shuffle=False)
+    for batch in sampler:
+        dates = sample.get_index()[batch].get_level_values("datetime")
+        if dates.nunique() != 1:
+            raise AssertionError("MASTER daily batch contains multiple trading dates")
+    ordered_index = sample.get_index()[sampler.ordered_indices()]
+    if not ordered_index.is_monotonic_increasing:
+        raise AssertionError("MASTER sampler output is not ordered by datetime and instrument")
 
     if args.train or args.backtest:
         checkpoint_dir = ROOT / "artifacts" / "smoke_checkpoints"

@@ -2,18 +2,46 @@ from pathlib import Path
 import inspect
 import unittest
 
+import pandas as pd
 import torch
 import yaml
 
 import qlib
 from alphamaster.dataset import marketDataHandler
-from alphamaster.model import MASTER, MASTERTrainer
+from alphamaster.model import DailyBatchSamplerRandom, MASTER, MASTERTrainer
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class ModelMigrationTest(unittest.TestCase):
+    def test_daily_sampler_groups_instrument_major_input_by_date(self):
+        class DataSource:
+            def __init__(self):
+                self.index = pd.MultiIndex.from_tuples(
+                    [
+                        (pd.Timestamp("2023-01-02"), "SH600000"),
+                        (pd.Timestamp("2023-01-03"), "SH600000"),
+                        (pd.Timestamp("2023-01-02"), "SZ000001"),
+                        (pd.Timestamp("2023-01-03"), "SZ000001"),
+                    ],
+                    names=["datetime", "instrument"],
+                )
+
+            def get_index(self):
+                return self.index
+
+        source = DataSource()
+        sampler = DailyBatchSamplerRandom(source, shuffle=False)
+        batches = list(sampler)
+
+        self.assertEqual(len(sampler), 2)
+        self.assertEqual([batch.tolist() for batch in batches], [[0, 2], [1, 3]])
+        self.assertEqual(sampler.ordered_indices().tolist(), [0, 2, 1, 3])
+        for batch in batches:
+            dates = source.get_index()[batch].get_level_values("datetime")
+            self.assertEqual(dates.nunique(), 1)
+
     def test_qlib_comes_from_conda_environment(self):
         qlib_path = Path(inspect.getfile(qlib)).resolve()
         self.assertIn("site-packages/qlib", qlib_path.as_posix())

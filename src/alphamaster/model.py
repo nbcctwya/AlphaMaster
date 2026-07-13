@@ -231,23 +231,40 @@ class DailyBatchSamplerRandom(Sampler):
     def __init__(self, data_source, shuffle=False):
         self.data_source = data_source
         self.shuffle = shuffle
-        # calculate number of samples in each batch
-        self.daily_count = pd.Series(index=self.data_source.get_index()).groupby("datetime").size().values
-        self.daily_index = np.roll(np.cumsum(self.daily_count), 1)  # calculate begin index of each batch
-        self.daily_index[0] = 0
+        index = self.data_source.get_index()
+        if not isinstance(index, pd.MultiIndex) or not {"datetime", "instrument"}.issubset(index.names):
+            raise ValueError("MASTER samples must have a MultiIndex with datetime and instrument levels")
+
+        # Qlib versions expose TSDataSampler indices in different physical orders:
+        # older versions are date-major, while Qlib 0.9.7 is instrument-major.
+        # MASTER's spatial attention requires every batch to contain exactly one
+        # trading day's cross-section, so calculate the real positions after
+        # sorting by (datetime, instrument) instead of assuming date-contiguous
+        # storage.
+        positions = pd.Series(np.arange(len(index), dtype=np.int64), index=index).sort_index()
+        self.daily_indices = [
+            group.to_numpy(dtype=np.int64, copy=True)
+            for _, group in positions.groupby(level="datetime", sort=True)
+        ]
+        self.daily_count = np.asarray([len(indices) for indices in self.daily_indices], dtype=np.int64)
 
     def __iter__(self):
         if self.shuffle:
-            index = np.arange(len(self.daily_count))
+            index = np.arange(len(self.daily_indices))
             np.random.shuffle(index)
             for i in index:
-                yield np.arange(self.daily_index[i], self.daily_index[i] + self.daily_count[i])
+                yield self.daily_indices[i]
         else:
-            for idx, count in zip(self.daily_index, self.daily_count):
-                yield np.arange(idx, idx + count)
+            yield from self.daily_indices
 
     def __len__(self):
-        return len(self.data_source)
+        return len(self.daily_indices)
+
+    def ordered_indices(self):
+        """Return sample positions in the same order as non-shuffled iteration."""
+        if not self.daily_indices:
+            return np.empty(0, dtype=np.int64)
+        return np.concatenate(self.daily_indices)
 
 
 class MASTERTrainer:
@@ -412,7 +429,11 @@ class MASTERTrainer:
             pred_all.append(pred.ravel())
 
 
-        pred_all = pd.DataFrame(np.concatenate(pred_all), index=dl_test.get_index())
+        # Data may be instrument-major in newer Qlib versions, while the loader
+        # deliberately emits date-major batches for spatial attention.  Align
+        # prediction labels with the exact emitted order.
+        pred_index = dl_test.get_index()[test_loader.sampler.ordered_indices()]
+        pred_all = pd.DataFrame(np.concatenate(pred_all), index=pred_index)
         # pred_all = pred_all.loc[self.label_all.index]
         # rec = self.backtest()
         return pred_all

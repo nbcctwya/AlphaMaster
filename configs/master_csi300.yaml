@@ -1,0 +1,125 @@
+### MASTER baseline — A-share CSI300 (region: cn)
+# Paper baseline config. Run with:
+#   conda activate rvqlab
+#   python run_baseline.py --market csi300            # full: 5 seeds x 40 epochs
+#   python run_baseline.py --market csi300 --smoke    # 1 epoch, seed 0 (pipeline check)
+#
+# NOTE: keep all dates UNQUOTED — run_baseline.py builds the handler-cache filename
+#       via .strftime() on the parsed date (PyYAML only yields datetime.date when unquoted).
+
+qlib_init:
+    provider_uri: "~/.qlib/qlib_data/cn_data"
+    region: cn
+market: &market csi300
+benchmark: &benchmark SH000300
+
+data_handler_config: &data_handler_config
+    start_time: 2008-01-01
+    end_time: 2025-12-31
+    fit_start_time: 2009-01-01
+    fit_end_time: 2020-12-31
+    instruments: *market
+    infer_processors:
+        - class: RobustZScoreNorm
+          kwargs:
+              fields_group: feature
+              clip_outlier: true
+        - class: Fillna
+          kwargs:
+              fields_group: feature
+    learn_processors:
+        - class: DropnaLabel
+        - class: CSRankNorm
+          kwargs:
+              fields_group: label
+    label: ["Ref($close, -5) / Ref($close, -1) - 1"]
+
+market_data_handler_config: &market_data_handler_config
+    start_time: 2008-01-01
+    end_time: 2025-12-31
+    fit_start_time: 2009-01-01
+    fit_end_time: 2020-12-31
+    instruments: *market
+    # 3 个市场宽基指数喂给 MASTER 的 market-guided gate (21 表达式 x 3 = 63 维)。
+    # 本地 cn_data 无中证100(sh000903), 改用中证1000(sh000852); 三指数数据均完整覆盖 2008~2025。
+    # 之前用的是 [sh000300, sh000903, sh000905], 但 sh000903 缺失导致那 21 维被填成 0 —— 见 backup_csi100_baseline/。
+    market_indices: ["sh000300", "sh000852", "sh000905"]   # 沪深300 / 中证1000 / 中证500
+    infer_processors:
+        - class: RobustZScoreNorm
+          kwargs:
+              fields_group: feature
+              clip_outlier: true
+        - class: Fillna
+          kwargs:
+              fields_group: feature
+
+port_analysis_config: &port_analysis_config
+    strategy:
+        class: TopkDropoutStrategy
+        module_path: qlib.contrib.strategy
+        kwargs:
+            signal: <PRED>
+            topk: 30
+            n_drop: 5
+    backtest:
+        start_time: 2023-01-01
+        end_time: 2025-12-31
+        account: 100000000
+        benchmark: *benchmark
+        exchange_kwargs:
+            limit_threshold: 0.095
+            deal_price: close
+            open_cost: 0.0005      # buy  cost = 万分之五
+            close_cost: 0.0015     # sell cost = 万分之十五
+            min_cost: 5
+
+task:
+    model:
+        class: MASTERTrainer
+        module_path: alphamaster.model
+        kwargs:
+            seed: 0                # overridden per-seed by run_baseline.py
+            d_feat: 158
+            d_model: 256
+            t_nhead: 4
+            s_nhead: 2
+            gate_input_start_index: 158
+            gate_input_end_index: 221
+            T_dropout_rate: 0.5
+            S_dropout_rate: 0.5
+            n_epochs: 40
+            lr: 0.000008
+            train_stop_loss_thred: 0.95
+            GPU: 0
+            market: *market        # beta auto -> 10 for csi300
+            benchmark: *benchmark
+            save_prefix: *market
+    dataset:
+        class: MASTERTSDatasetH
+        module_path: alphamaster.dataset
+        kwargs:
+            handler:
+                class: Alpha158
+                module_path: qlib.contrib.data.handler
+                kwargs: *data_handler_config
+            segments:
+                train: [2009-01-01, 2020-12-31]
+                valid: [2021-01-01, 2022-12-31]
+                test: [2023-01-01, 2025-12-31]
+            step_len: 8
+            market_data_handler_config: *market_data_handler_config
+    record:
+        - class: SignalRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              model: <MODEL>
+              dataset: <DATASET>
+        - class: SigAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              ana_long_short: False
+              ann_scaler: 252
+        - class: PortAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs:
+              config: *port_analysis_config

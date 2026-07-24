@@ -387,8 +387,15 @@ class MASTERTrainer:
         self.fitted = True
 
     def fit(self, dataset):
-        dl_train = dataset.prepare("train", col_set=["feature", "label"], data_key=DataHandlerLP.DK_L)
-        dl_valid = dataset.prepare("valid", col_set=["feature", "label"], data_key=DataHandlerLP.DK_L)
+        # The network consumes float32 tensors.  Building Qlib samplers directly
+        # as float32 avoids retaining a second float64 copy of large datasets
+        # (notably SP500) before the batches are transferred to the GPU.
+        dl_train = dataset.prepare(
+            "train", col_set=["feature", "label"], data_key=DataHandlerLP.DK_L, dtype=np.float32
+        )
+        dl_valid = dataset.prepare(
+            "valid", col_set=["feature", "label"], data_key=DataHandlerLP.DK_L, dtype=np.float32
+        )
         train_loader = self._init_data_loader(dl_train, shuffle=True, drop_last=True)
         valid_loader = self._init_data_loader(dl_valid, shuffle=False, drop_last=True)
 
@@ -415,7 +422,9 @@ class MASTERTrainer:
         if not self.fitted:
             raise ValueError("model is not fitted yet!")
 
-        dl_test = dataset.prepare("test", col_set=["feature", "label"], data_key=DataHandlerLP.DK_I)
+        dl_test = dataset.prepare(
+            "test", col_set=["feature", "label"], data_key=DataHandlerLP.DK_I, dtype=np.float32
+        )
         test_loader = self._init_data_loader(dl_test, shuffle=False, drop_last=False)
 
         pred_all = []

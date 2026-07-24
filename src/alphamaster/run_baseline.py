@@ -21,16 +21,19 @@ Usage (from AlphaMaster with ``PYTHONPATH=src``, using the rvqlab env):
 """
 import inspect
 import argparse
+import gc
 from pathlib import Path
 
 import yaml
 import numpy as np
+import pandas as pd
 import pprint as pp
 
 DIRNAME = Path(__file__).absolute().resolve().parent
 PROJECT_ROOT = DIRNAME.parents[1]
 CONFIG_DIR = PROJECT_ROOT / "configs"
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
+RESULTS_DIR = ARTIFACTS_DIR / "results"
 
 import qlib
 from qlib.utils import init_instance_by_config
@@ -85,7 +88,10 @@ def main():
         "class": "MLflowExpManager",
         "module_path": "qlib.workflow.expm",
         "kwargs": {
-            "uri": f"file:{ARTIFACTS_DIR / 'mlruns'}",
+            # MLflow >= 3.12 rejects a run directory if any parent directory is
+            # literally named "artifacts".  Keep the tracking store at the
+            # project root while model/data artifacts remain under artifacts/.
+            "uri": f"file:{PROJECT_ROOT / 'mlruns'}",
             "default_exp_name": "Experiment",
         },
     }
@@ -121,8 +127,18 @@ def main():
     seg_kwargs["handler"] = f"file://{h_path}"
     dataset = init_instance_by_config(config["task"]["dataset"])
 
+    # dump_all handlers contain raw, infer, and learn copies.  This experiment
+    # uses the stock learn copy for train/valid, the stock infer copy for test,
+    # and only the market infer copy.  Releasing the unused in-memory copies
+    # saves roughly 2.2 GB for SP500 without changing any prepared segment.
+    dataset.handler._data = None
+    dataset.market_dataset.handler._data = None
+    dataset.market_dataset.handler._learn = None
+    gc.collect()
+
     checkpoint_dir = ARTIFACTS_DIR / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     all_metrics = {k: [] for k in METRIC_KEYS}
     for seed in seeds:
@@ -147,6 +163,16 @@ def main():
 
             metrics = recorder.list_metrics()
             print(metrics)
+            result_path = RESULTS_DIR / f"{args.market}_seed{seed}_backtest.csv"
+            result_row = {
+                "market": args.market,
+                "seed": seed,
+                "experiment_name": f"{config['market']}_MASTER_seed{seed}",
+                "recorder_id": recorder.id,
+                **metrics,
+            }
+            pd.DataFrame([result_row]).to_csv(result_path, index=False)
+            print("Backtest metrics saved to", result_path)
             for k in all_metrics:
                 if k in metrics:
                     all_metrics[k].append(metrics[k])

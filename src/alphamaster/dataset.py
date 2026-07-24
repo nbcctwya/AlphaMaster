@@ -141,8 +141,16 @@ class MASTERTSDatasetH(TSDatasetH):
         if not only_label:
             marketData = self.get_market_information(ext_slice)
             cols = pd.MultiIndex.from_tuples([("feature", feature) for feature in marketData.columns])
-            marketData = pd.DataFrame(marketData.values, columns = cols, index = marketData.index)
-            data = data.iloc[:,:-1].join(marketData).join(data.iloc[:,-1])
+            marketData.columns = cols
+            marketData = marketData.reindex(data.index)
+            # Build the 158 stock features, 63 market features, and label in one
+            # operation.  Chaining two joins temporarily retained an additional
+            # full-width DataFrame and could push SP500 preparation over RAM.
+            data = pd.concat(
+                [data.iloc[:, :-1], marketData, data.iloc[:, -1:]],
+                axis=1,
+                copy=False,
+            )
         #################################################################################
         flt_kwargs = copy.deepcopy(kwargs)
         if flt_col is not None:

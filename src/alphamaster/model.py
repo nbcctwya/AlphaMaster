@@ -201,6 +201,7 @@ class MASTER(nn.Module):
         self.pe = PositionalEncoding(d_model)
         self.tatten = TAttention(d_model=d_model, nhead=t_nhead, dropout=T_dropout_rate)
         self.satten = SAttention(d_model=d_model, nhead=s_nhead, dropout=S_dropout_rate)
+        self.satten2 = SAttention(d_model=d_model, nhead=s_nhead, dropout=S_dropout_rate)
         self.temporalatten = TemporalAttention(d_model=d_model)
         self.decoder = nn.Linear(d_model, 1)
 
@@ -212,8 +213,9 @@ class MASTER(nn.Module):
 
         x = self.x2y(src)
         x = self.pe(x)
-        x = self.tatten(x)
         x = self.satten(x)
+        x = self.tatten(x)
+        x = self.satten2(x)
         x = self.temporalatten(x)
         output = self.decoder(x).squeeze(-1)
 

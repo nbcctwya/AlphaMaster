@@ -74,6 +74,40 @@ class ModelMigrationTest(unittest.TestCase):
         self.assertEqual(len(fields), 63)
         self.assertEqual(len(names), 63)
 
+    def test_master_runs_spatial_temporal_spatial_attention(self):
+        model = MASTER(
+            d_feat=158,
+            d_model=256,
+            t_nhead=4,
+            s_nhead=2,
+            gate_input_start_index=158,
+            gate_input_end_index=221,
+            T_dropout_rate=0.5,
+            S_dropout_rate=0.5,
+            beta=10,
+        )
+        call_order = []
+        hooks = [
+            model.satten.register_forward_hook(
+                lambda _module, _inputs, _output: call_order.append("spatial_1")
+            ),
+            model.tatten.register_forward_hook(
+                lambda _module, _inputs, _output: call_order.append("temporal")
+            ),
+            model.satten2.register_forward_hook(
+                lambda _module, _inputs, _output: call_order.append("spatial_2")
+            ),
+        ]
+        try:
+            model.eval()
+            with torch.no_grad():
+                model(torch.randn(7, 8, 221))
+        finally:
+            for hook in hooks:
+                hook.remove()
+
+        self.assertEqual(call_order, ["spatial_1", "temporal", "spatial_2"])
+
     def test_baseline_configuration_is_preserved(self):
         expected_segments = {
             "train": ["2009-01-01", "2020-12-31"],
